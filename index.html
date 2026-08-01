@@ -1,0 +1,887 @@
+<!DOCTYPE html>
+<html lang="zh-HK">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="theme-color" content="#0f172a">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <link rel="manifest" href="manifest.json">
+  <link rel="apple-touch-icon" href="https://placehold.co/192x192/10b981/ffffff?text=13">
+  <title>十三支 (Thirteen Cards) 智能擺牌與算分神器</title>
+  <!-- Tailwind CSS CDN -->
+  <script src="https://cdn.tailwindcss.com"></script>
+  <!-- React & React DOM CDN -->
+  <script src="https://unpkg.com/react@18/umd/react.production.min.js" crossorigin></script>
+  <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js" crossorigin></script>
+  <!-- Babel CDN for JSX -->
+  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+  <!-- Lucide Icons CDN -->
+  <script src="https://unpkg.com/lucide@latest"></script>
+  <style>
+    @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap');
+    body {
+      font-family: 'Inter', system-ui, -apple-system, sans-serif;
+      background-color: #0f172a;
+      color: #f8fafc;
+    }
+    .poker-bg {
+      background: radial-gradient(circle at center, #1e3a29 0%, #0d1e15 100%);
+    }
+    .custom-scrollbar::-webkit-scrollbar {
+      width: 6px;
+      height: 6px;
+    }
+    .custom-scrollbar::-webkit-scrollbar-track {
+      background: #1e293b;
+    }
+    .custom-scrollbar::-webkit-scrollbar-thumb {
+      background: #475569;
+      border-radius: 4px;
+    }
+  </style>
+</head>
+<body class="poker-bg min-h-screen text-slate-100 flex flex-col">
+
+  <div id="root" class="flex-1 flex flex-col"></div>
+
+  <script type="text/babel">
+    const { useState, useEffect, useMemo } = React;
+
+    const SUITS = [
+      { code: 'S', symbol: '♠', label: '黑桃', color: 'text-slate-100' },
+      { code: 'H', symbol: '♥', label: '紅心', color: 'text-red-500' },
+      { code: 'C', symbol: '♣', label: '梅花', color: 'text-emerald-400' },
+      { code: 'D', symbol: '♦', label: '方塊', color: 'text-blue-400' }
+    ];
+
+    const RANKS = [
+      { value: 14, label: 'A' },
+      { value: 13, label: 'K' },
+      { value: 12, label: 'Q' },
+      { value: 11, label: 'J' },
+      { value: 10, label: '10' },
+      { value: 9, label: '9' },
+      { value: 8, label: '8' },
+      { value: 7, label: '7' },
+      { value: 6, label: '6' },
+      { value: 5, label: '5' },
+      { value: 4, label: '4' },
+      { value: 3, label: '3' },
+      { value: 2, label: '2' }
+    ];
+
+    // Generate Full Deck
+    const DECK = [];
+    SUITS.forEach(suit => {
+      RANKS.forEach(rank => {
+        DECK.push({
+          id: `${suit.code}_${rank.value}`,
+          suit: suit.code,
+          symbol: suit.symbol,
+          color: suit.color,
+          value: rank.value,
+          label: rank.label
+        });
+      });
+    });
+
+    // Rank scores for 5-card hands
+    const HAND_TYPES = {
+      STRAIGHT_FLUSH: 8,
+      FOUR_OF_A_KIND: 7,
+      FULL_HOUSE: 6,
+      FLUSH: 5,
+      STRAIGHT: 4,
+      THREE_OF_A_KIND: 3,
+      TWO_PAIR: 2,
+      ONE_PAIR: 1,
+      HIGH_CARD: 0
+    };
+
+    const HAND_NAMES = {
+      8: '同花順',
+      7: '四條 (鐵支)',
+      6: '夫佬 (滿堂紅)',
+      5: '同花',
+      4: '順子',
+      3: '三條',
+      2: '兩對',
+      1: '一對',
+      0: '無頭 / 烏龍高牌'
+    };
+
+    // Helper: Check straight in 5 cards
+    function getStraightRank(cards) {
+      const vals = cards.map(c => c.value).sort((a,b) => b - a);
+      const uniqueVals = [...new Set(vals)];
+      if (uniqueVals.length !== 5) return 0;
+      
+      // Standard straight
+      if (uniqueVals[0] - uniqueVals[4] === 4) return uniqueVals[0];
+      
+      // Ace-low straight (5-4-3-2-A)
+      if (uniqueVals[0] === 14 && uniqueVals[1] === 5 && uniqueVals[2] === 4 && uniqueVals[3] === 3 && uniqueVals[4] === 2) {
+        return 5;
+      }
+      return 0;
+    }
+
+    // Evaluate 5 cards
+    function evaluate5CardHand(cards) {
+      const vals = cards.map(c => c.value).sort((a,b) => b - a);
+      const isFlush = cards.every(c => c.suit === cards[0].suit);
+      const straightHigh = getStraightRank(cards);
+      
+      const counts = {};
+      vals.forEach(v => counts[v] = (counts[v] || 0) + 1);
+      
+      const countEntries = Object.entries(counts).map(([v, c]) => ({ val: Number(v), count: c }));
+      countEntries.sort((a, b) => b.count - a.count || b.val - a.val);
+
+      if (isFlush && straightHigh > 0) {
+        return { type: HAND_TYPES.STRAIGHT_FLUSH, score: [HAND_TYPES.STRAIGHT_FLUSH, straightHigh], name: '同花順' };
+      }
+      
+      if (countEntries[0].count === 4) {
+        return { 
+          type: HAND_TYPES.FOUR_OF_A_KIND, 
+          score: [HAND_TYPES.FOUR_OF_A_KIND, countEntries[0].val, countEntries[1].val], 
+          name: '四條' 
+        };
+      }
+      
+      if (countEntries[0].count === 3 && countEntries[1].count === 2) {
+        return { 
+          type: HAND_TYPES.FULL_HOUSE, 
+          score: [HAND_TYPES.FULL_HOUSE, countEntries[0].val, countEntries[1].val], 
+          name: '夫佬' 
+        };
+      }
+      
+      if (isFlush) {
+        return { type: HAND_TYPES.FLUSH, score: [HAND_TYPES.FLUSH, ...vals], name: '同花' };
+      }
+      
+      if (straightHigh > 0) {
+        return { type: HAND_TYPES.STRAIGHT, score: [HAND_TYPES.STRAIGHT, straightHigh], name: '順子' };
+      }
+      
+      if (countEntries[0].count === 3) {
+        const kickers = countEntries.slice(1).map(e => e.val);
+        return { type: HAND_TYPES.THREE_OF_A_KIND, score: [HAND_TYPES.THREE_OF_A_KIND, countEntries[0].val, ...kickers], name: '三條' };
+      }
+      
+      if (countEntries[0].count === 2 && countEntries[1].count === 2) {
+        return { type: HAND_TYPES.TWO_PAIR, score: [HAND_TYPES.TWO_PAIR, countEntries[0].val, countEntries[1].val, countEntries[2].val], name: '兩對' };
+      }
+      
+      if (countEntries[0].count === 2) {
+        const kickers = countEntries.slice(1).map(e => e.val);
+        return { type: HAND_TYPES.ONE_PAIR, score: [HAND_TYPES.ONE_PAIR, countEntries[0].val, ...kickers], name: '一對' };
+      }
+      
+      return { type: HAND_TYPES.HIGH_CARD, score: [HAND_TYPES.HIGH_CARD, ...vals], name: '無頭 (高牌)' };
+    }
+
+    // Evaluate 3 cards (Front Hand: No Straight or Flush allowed per standard rules)
+    function evaluate3CardHand(cards) {
+      const vals = cards.map(c => c.value).sort((a,b) => b - a);
+      const counts = {};
+      vals.forEach(v => counts[v] = (counts[v] || 0) + 1);
+      
+      const countEntries = Object.entries(counts).map(([v, c]) => ({ val: Number(v), count: c }));
+      countEntries.sort((a, b) => b.count - a.count || b.val - a.val);
+
+      if (countEntries[0].count === 3) {
+        return { type: HAND_TYPES.THREE_OF_A_KIND, score: [HAND_TYPES.THREE_OF_A_KIND, countEntries[0].val], name: '三條' };
+      }
+      if (countEntries[0].count === 2) {
+        return { type: HAND_TYPES.ONE_PAIR, score: [HAND_TYPES.ONE_PAIR, countEntries[0].val, countEntries[1].val], name: '一對' };
+      }
+      return { type: HAND_TYPES.HIGH_CARD, score: [HAND_TYPES.HIGH_CARD, ...vals], name: '無頭' };
+    }
+
+    function compareScores(scoreA, scoreB) {
+      const len = Math.min(scoreA.length, scoreB.length);
+      for (let i = 0; i < len; i++) {
+        if (scoreA[i] > scoreB[i]) return 1;
+        if (scoreA[i] < scoreB[i]) return -1;
+      }
+      return 0; // Equal
+    }
+
+    function checkNaturalHands(cards13) {
+      if (cards13.length !== 13) return null;
+      
+      const sorted = [...cards13].sort((a,b) => a.value - b.value);
+      const suits = cards13.map(c => c.suit);
+      const values = cards13.map(c => c.value);
+
+      // 1. 青龍 (Clean Dragon) - 13 cards same suit A..K
+      const allSameSuit = suits.every(s => s === suits[0]);
+      const isDragonValues = values.slice().sort((a,b)=>a-b).every((v, idx) => v === idx + 2);
+      
+      if (allSameSuit && isDragonValues) {
+        return { name: '青龍 (同花至尊龍)', points: 32, desc: '全同花的一條龍 (2~A)' };
+      }
+
+      // 2. 雜龍 (Dragon) - 13 cards A..K
+      if (isDragonValues) {
+        return { name: '雜龍 (一條龍)', points: 13, desc: '包含 A-K 各一張' };
+      }
+
+      // 3. 六對半 (Six Pairs)
+      const counts = {};
+      values.forEach(v => counts[v] = (counts[v] || 0) + 1);
+      const pairCount = Object.values(counts).filter(c => c >= 2).length;
+      const fourCount = Object.values(counts).filter(c => c === 4).length;
+      if (pairCount + fourCount === 6) {
+        return { name: '六對半', points: 3, desc: '牌中有 6 個對子' };
+      }
+
+      return null;
+    }
+
+    // Generate all 3, 5, 5 combinations from 13 cards
+    function solveThirteen(cards13) {
+      if (cards13.length !== 13) return [];
+
+      const results = [];
+      const n = 13;
+
+      // Combinations of 3 for Front
+      for (let i = 0; i < n; i++) {
+        for (let j = i + 1; j < n; j++) {
+          for (let k = j + 1; k < n; k++) {
+            const front = [cards13[i], cards13[j], cards13[k]];
+            const rem10 = cards13.filter((_, idx) => idx !== i && idx !== j && idx !== k);
+            
+            // Combinations of 5 for Middle out of remaining 10
+            for (let m1 = 0; m1 < 10; m1++) {
+              for (let m2 = m1 + 1; m2 < 10; m2++) {
+                for (let m3 = m2 + 1; m3 < 10; m3++) {
+                  for (let m4 = m3 + 1; m4 < 10; m4++) {
+                    for (let m5 = m4 + 1; m5 < 10; m5++) {
+                      const middle = [rem10[m1], rem10[m2], rem10[m3], rem10[m4], rem10[m5]];
+                      const back = rem10.filter((_, idx) => 
+                        idx !== m1 && idx !== m2 && idx !== m3 && idx !== m4 && idx !== m5
+                      );
+
+                      const frontEval = evaluate3CardHand(front);
+                      const midEval = evaluate5CardHand(middle);
+                      const backEval = evaluate5CardHand(back);
+
+                      // Check for Foul (倒水/烏龍): Front <= Middle <= Back
+                      const frontVsMid = compareScores(frontEval.score, midEval.score);
+                      const midVsBack = compareScores(midEval.score, backEval.score);
+
+                      if (frontVsMid <= 0 && midVsBack <= 0) {
+                        // Calculate Bonus Points based on prompt rules:
+                        // 三條擺「頭」：勝出得三注 (+2 bonus)
+                        // 夫佬（滿堂紅）擺「二道」:勝出得兩注 (+1 bonus)
+                        // 四條擺「尾」：勝出得四注 (+3 bonus). 作「二道」：得八注 (+7 bonus).
+                        // 同花順擺「尾」：勝出得五注 (+4 bonus). 作「二道」：得十注 (+9 bonus).
+                        let bonusPoints = 0;
+                        let bonusDetails = [];
+
+                        if (frontEval.type === HAND_TYPES.THREE_OF_A_KIND) {
+                          bonusPoints += 3;
+                          bonusDetails.push('頭道三條 (+3注)');
+                        }
+                        if (midEval.type === HAND_TYPES.FULL_HOUSE) {
+                          bonusPoints += 2;
+                          bonusDetails.push('二道夫佬 (+2注)');
+                        }
+                        if (midEval.type === HAND_TYPES.FOUR_OF_A_KIND) {
+                          bonusPoints += 8;
+                          bonusDetails.push('二道四條 (+8注)');
+                        }
+                        if (backEval.type === HAND_TYPES.FOUR_OF_A_KIND) {
+                          bonusPoints += 4;
+                          bonusDetails.push('尾道四條 (+4注)');
+                        }
+                        if (midEval.type === HAND_TYPES.STRAIGHT_FLUSH) {
+                          bonusPoints += 10;
+                          bonusDetails.push('二道同花順 (+10注)');
+                        }
+                        if (backEval.type === HAND_TYPES.STRAIGHT_FLUSH) {
+                          bonusPoints += 5;
+                          bonusDetails.push('尾道同花順 (+5注)');
+                        }
+
+                        // Utility Power Rating
+                        const totalPower = (
+                          (frontEval.type * 100 + frontEval.score[1] || 0) +
+                          (midEval.type * 1000 + midEval.score[1] || 0) +
+                          (backEval.type * 10000 + backEval.score[1] || 0) +
+                          (bonusPoints * 5000)
+                        );
+
+                        results.push({
+                          front,
+                          middle,
+                          back,
+                          frontEval,
+                          midEval,
+                          backEval,
+                          bonusPoints,
+                          bonusDetails,
+                          totalPower
+                        });
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+
+      // Sort by total estimated power
+      results.sort((a, b) => b.totalPower - a.totalPower);
+
+      return results;
+    }
+
+    function App() {
+      const [selectedCards, setSelectedCards] = useState([]);
+      const [activeTab, setActiveTab] = useState('picker'); // 'picker', 'solver', 'manual'
+      
+      // Manual arrangements
+      const [manualFront, setManualFront] = useState([]);
+      const [manualMiddle, setManualMiddle] = useState([]);
+      const [manualBack, setManualBack] = useState([]);
+
+      // Preset Test Decks for fast testing
+      const handleLoadPreset = (type) => {
+        let deck = [];
+        if (type === 'dragon') {
+          // 雜龍 A-K
+          deck = DECK.filter((_, idx) => idx % 4 === 0).slice(0, 13);
+        } else if (type === 'bonus_heavy') {
+          // Cards that can make Full House in middle, Four of kind in back, Pair in front
+          // 7,7,7, 8,8,8,8, 9,9,9, 10,10,10
+          deck = [
+            DECK.find(c => c.value === 14 && c.suit === 'S'),
+            DECK.find(c => c.value === 14 && c.suit === 'H'),
+            DECK.find(c => c.value === 14 && c.suit === 'D'),
+            DECK.find(c => c.value === 10 && c.suit === 'S'),
+            DECK.find(c => c.value === 10 && c.suit === 'H'),
+            DECK.find(c => c.value === 10 && c.suit === 'D'),
+            DECK.find(c => c.value === 10 && c.suit === 'C'),
+            DECK.find(c => c.value === 8 && c.suit === 'S'),
+            DECK.find(c => c.value === 8 && c.suit === 'H'),
+            DECK.find(c => c.value === 8 && c.suit === 'D'),
+            DECK.find(c => c.value === 8 && c.suit === 'C'),
+            DECK.find(c => c.value === 2 && c.suit === 'S'),
+            DECK.find(c => c.value === 3 && c.suit === 'H'),
+          ];
+        } else if (type === 'random') {
+          const shuffled = [...DECK].sort(() => Math.random() - 0.5);
+          deck = shuffled.slice(0, 13);
+        }
+        setSelectedCards(deck);
+        setManualFront([]);
+        setManualMiddle([]);
+        setManualBack([]);
+      };
+
+      // Toggle Card Selection
+      const toggleCardSelect = (card) => {
+        if (selectedCards.some(c => c.id === card.id)) {
+          setSelectedCards(selectedCards.filter(c => c.id !== card.id));
+        } else {
+          if (selectedCards.length < 13) {
+            setSelectedCards([...selectedCards, card]);
+          }
+        }
+      };
+
+      // Natural hand check
+      const naturalHand = useMemo(() => {
+        return checkNaturalHands(selectedCards);
+      }, [selectedCards]);
+
+      // Computed Solved Solutions
+      const solvedArrangements = useMemo(() => {
+        if (selectedCards.length !== 13) return [];
+        return solveThirteen(selectedCards);
+      }, [selectedCards]);
+
+      // Auto-fill Manual board with selected recommendation
+      const applyArrangement = (arr) => {
+        setManualFront(arr.front);
+        setManualMiddle(arr.middle);
+        setManualBack(arr.back);
+        setActiveTab('manual');
+      };
+
+      const manualEval = useMemo(() => {
+        if (manualFront.length !== 3 || manualMiddle.length !== 5 || manualBack.length !== 5) {
+          return null;
+        }
+        const frontEval = evaluate3CardHand(manualFront);
+        const midEval = evaluate5CardHand(manualMiddle);
+        const backEval = evaluate5CardHand(manualBack);
+
+        const frontVsMid = compareScores(frontEval.score, midEval.score);
+        const midVsBack = compareScores(midEval.score, backEval.score);
+        const isFoul = frontVsMid > 0 || midVsBack > 0;
+
+        let bonusPoints = 0;
+        let bonusDetails = [];
+        if (!isFoul) {
+          if (frontEval.type === HAND_TYPES.THREE_OF_A_KIND) {
+            bonusPoints += 3;
+            bonusDetails.push('頭道三條 (+3注)');
+          }
+          if (midEval.type === HAND_TYPES.FULL_HOUSE) {
+            bonusPoints += 2;
+            bonusDetails.push('二道夫佬 (+2注)');
+          }
+          if (midEval.type === HAND_TYPES.FOUR_OF_A_KIND) {
+            bonusPoints += 8;
+            bonusDetails.push('二道四條 (+8注)');
+          }
+          if (backEval.type === HAND_TYPES.FOUR_OF_A_KIND) {
+            bonusPoints += 4;
+            bonusDetails.push('尾道四條 (+4注)');
+          }
+          if (midEval.type === HAND_TYPES.STRAIGHT_FLUSH) {
+            bonusPoints += 10;
+            bonusDetails.push('二道同花順 (+10注)');
+          }
+          if (backEval.type === HAND_TYPES.STRAIGHT_FLUSH) {
+            bonusPoints += 5;
+            bonusDetails.push('尾道同花順 (+5注)');
+          }
+        }
+
+        return { frontEval, midEval, backEval, isFoul, bonusPoints, bonusDetails };
+      }, [manualFront, manualMiddle, manualBack]);
+
+      return (
+        <div className="max-w-7xl mx-auto w-full p-4 md:p-6 flex-1 flex flex-col gap-6">
+          
+          {/* Header Bar */}
+          <header className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4 bg-slate-900/80 backdrop-blur border border-slate-800 p-4 rounded-2xl shadow-xl">
+            <div className="flex items-center gap-3">
+              <div className="w-10 h-10 rounded-xl bg-emerald-600 flex items-center justify-center font-black text-xl text-white shadow-lg shadow-emerald-900/50">
+                13
+              </div>
+              <div>
+                <h1 className="text-xl font-bold bg-gradient-to-r from-emerald-400 to-teal-200 bg-clip-text text-transparent">
+                  十三支 智能擺牌與算分神器
+                </h1>
+                <p className="text-xs text-slate-400">極速算法求解 · 報到檢測 · 倒水警示 · 規則加注計算</p>
+              </div>
+            </div>
+
+            {/* Quick Actions */}
+            <div className="flex flex-wrap items-center gap-2">
+              <button 
+                onClick={() => handleLoadPreset('random')}
+                className="px-3 py-1.5 rounded-lg bg-emerald-600/30 hover:bg-emerald-600/50 border border-emerald-500/30 text-emerald-300 text-xs font-semibold transition flex items-center gap-1.5"
+              >
+                <span>🎲 隨機發13張</span>
+              </button>
+              <button 
+                onClick={() => handleLoadPreset('bonus_heavy')}
+                className="px-3 py-1.5 rounded-lg bg-purple-600/30 hover:bg-purple-600/50 border border-purple-500/30 text-purple-300 text-xs font-semibold transition"
+              >
+                🔥 測試大牌型
+              </button>
+              <button 
+                onClick={() => setSelectedCards([])}
+                className="px-3 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs transition"
+              >
+                🗑️ 清空
+              </button>
+            </div>
+          </header>
+
+          {}
+          {naturalHand && (
+            <div className="bg-gradient-to-r from-amber-500/20 via-yellow-500/20 to-amber-500/20 border border-amber-500/50 rounded-2xl p-4 flex items-center justify-between shadow-lg animate-pulse">
+              <div className="flex items-center gap-3">
+                <span className="text-3xl">🎉</span>
+                <div>
+                  <div className="text-amber-400 font-bold text-lg flex items-center gap-2">
+                    【報到/例牌】{naturalHand.name}
+                    <span className="bg-amber-500/30 text-amber-300 text-xs px-2 py-0.5 rounded-full border border-amber-400/40">
+                      勝 {naturalHand.points} 注
+                    </span>
+                  </div>
+                  <div className="text-xs text-slate-300">{naturalHand.desc}（若莊家與閒家同時報到，由莊家賠閒家）</div>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* Main Grid: Card Selection vs Solver/Manual Board */}
+          <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 flex-1">
+
+            {/* Left Panel: Selected Cards & Deck Selector (5 cols) */}
+            <div className="lg:col-span-5 flex flex-col gap-4">
+              
+              {/* Selected Hand Dock */}
+              <div className="bg-slate-900/80 border border-slate-800 rounded-2xl p-4 shadow-xl">
+                <div className="flex justify-between items-center mb-3">
+                  <h2 className="font-bold text-sm text-slate-200 flex items-center gap-2">
+                    🎴 已選牌組
+                    <span className={`text-xs px-2 py-0.5 rounded-full font-mono ${selectedCards.length === 13 ? 'bg-emerald-500/20 text-emerald-400 border border-emerald-500/30' : 'bg-slate-800 text-slate-400'}`}>
+                      {selectedCards.length} / 13
+                    </span>
+                  </h2>
+                  {selectedCards.length < 13 && (
+                    <span className="text-xs text-amber-400">還需選擇 {13 - selectedCards.length} 張</span>
+                  )}
+                </div>
+
+                {/* Selected Cards Display Grid */}
+                <div className="min-h-[110px] bg-slate-950/60 rounded-xl p-3 border border-slate-800/80 flex flex-wrap gap-2 items-center">
+                  {selectedCards.length === 0 ? (
+                    <div className="w-full text-center py-6 text-slate-500 text-xs">
+                      請在下方點選 13 張牌，或點擊「隨機發13張」
+                    </div>
+                  ) : (
+                    selectedCards.map(card => (
+                      <button
+                        key={card.id}
+                        onClick={() => toggleCardSelect(card)}
+                        className="w-10 h-14 bg-slate-100 hover:bg-slate-200 text-slate-900 rounded-lg shadow-md flex flex-col justify-between p-1 font-bold text-xs transition transform hover:-translate-y-1 relative group"
+                      >
+                        <div className={`text-left leading-none ${card.suit === 'H' || card.suit === 'D' ? 'text-red-600' : 'text-slate-900'}`}>
+                          {card.label}
+                        </div>
+                        <div className={`text-center text-sm leading-none ${card.suit === 'H' || card.suit === 'D' ? 'text-red-600' : 'text-slate-900'}`}>
+                          {card.symbol}
+                        </div>
+                        <div className="absolute inset-0 bg-red-500/80 text-white font-bold text-xs flex items-center justify-center opacity-0 group-hover:opacity-100 rounded-lg transition">
+                          ✕
+                        </div>
+                      </button>
+                    ))
+                  )}
+                </div>
+              </div>
+
+              {}
+              <div className="bg-slate-900/80 border border-slate-800 rounded-2xl p-4 shadow-xl flex-1 flex flex-col">
+                <h2 className="font-bold text-sm text-slate-200 mb-3">選擇卡牌 (52張)</h2>
+                
+                <div className="space-y-3 overflow-y-auto custom-scrollbar flex-1 pr-1">
+                  {SUITS.map(suit => (
+                    <div key={suit.code} className="bg-slate-950/40 p-2 rounded-xl border border-slate-800/50">
+                      <div className="text-xs font-semibold mb-1.5 flex items-center gap-1 text-slate-400">
+                        <span className={suit.color}>{suit.symbol}</span> {suit.label}
+                      </div>
+                      <div className="grid grid-cols-7 sm:grid-cols-13 gap-1">
+                        {RANKS.map(rank => {
+                          const card = DECK.find(c => c.suit === suit.code && c.value === rank.value);
+                          const isSelected = selectedCards.some(c => c.id === card.id);
+                          return (
+                            <button
+                              key={card.id}
+                              disabled={!isSelected && selectedCards.length >= 13}
+                              onClick={() => toggleCardSelect(card)}
+                              className={`h-11 rounded-md text-xs font-bold transition flex flex-col items-center justify-center border ${
+                                isSelected 
+                                  ? 'bg-emerald-500 text-slate-950 border-emerald-400 shadow-md scale-95 opacity-50' 
+                                  : 'bg-slate-800/80 hover:bg-slate-700 text-slate-200 border-slate-700/60 disabled:opacity-30 disabled:hover:bg-slate-800'
+                              }`}
+                            >
+                              <span className={isSelected ? 'text-slate-950' : card.color}>{card.symbol}</span>
+                              <span className="leading-tight">{card.label}</span>
+                            </button>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+
+            </div>
+
+            {/* Right Panel: AI Solver & Manual Inspector (7 cols) */}
+            <div className="lg:col-span-7 flex flex-col gap-4">
+              
+              {/* Navigation Tabs */}
+              <div className="flex bg-slate-900/80 p-1.5 rounded-xl border border-slate-800">
+                <button
+                  onClick={() => setActiveTab('solver')}
+                  className={`flex-1 py-2 rounded-lg text-xs font-bold transition flex items-center justify-center gap-2 ${
+                    activeTab === 'solver' 
+                      ? 'bg-emerald-600 text-white shadow-lg' 
+                      : 'text-slate-400 hover:text-slate-200'
+                  }`}
+                >
+                  ⚡ AI 智能推薦組合 ({solvedArrangements.length})
+                </button>
+                <button
+                  onClick={() => setActiveTab('manual')}
+                  className={`flex-1 py-2 rounded-lg text-xs font-bold transition flex items-center justify-center gap-2 ${
+                    activeTab === 'manual' 
+                      ? 'bg-emerald-600 text-white shadow-lg' 
+                      : 'text-slate-400 hover:text-slate-200'
+                  }`}
+                >
+                  🛠️ 自由手動擺牌與驗證
+                </button>
+              </div>
+
+              {}
+              {activeTab === 'solver' && (
+                <div className="bg-slate-900/80 border border-slate-800 rounded-2xl p-4 shadow-xl flex-1 flex flex-col">
+                  {selectedCards.length !== 13 ? (
+                    <div className="flex-1 flex flex-col items-center justify-center py-12 text-slate-500">
+                      <span className="text-4xl mb-2">🃏</span>
+                      <p className="text-sm font-medium">請先選滿 13 張牌以進行智能算法分析</p>
+                    </div>
+                  ) : solvedArrangements.length === 0 ? (
+                    <div className="flex-1 flex flex-col items-center justify-center py-12 text-red-400">
+                      <span className="text-4xl mb-2">⚠️</span>
+                      <p className="text-sm font-bold">無解！該組牌型無法擺出非倒水組合</p>
+                    </div>
+                  ) : (
+                    <div className="space-y-4 overflow-y-auto custom-scrollbar flex-1 max-h-[600px] pr-1">
+                      <div className="text-xs text-slate-400 flex justify-between items-center">
+                        <span>已從 72,072 種排列中精選最佳方案：</span>
+                        <span className="text-emerald-400 font-semibold">符合規律合法組合: {solvedArrangements.length} 個</span>
+                      </div>
+
+                      {solvedArrangements.slice(0, 5).map((solution, idx) => (
+                        <div 
+                          key={idx} 
+                          className="bg-slate-950/70 border border-slate-800 hover:border-slate-700 rounded-2xl p-4 transition shadow-md flex flex-col gap-3"
+                        >
+                          <div className="flex justify-between items-center border-b border-slate-800/80 pb-2">
+                            <div className="flex items-center gap-2">
+                              <span className={`px-2 py-0.5 rounded text-xs font-black ${
+                                idx === 0 ? 'bg-amber-500 text-slate-950' : 'bg-slate-800 text-slate-300'
+                              }`}>
+                                {idx === 0 ? '最佳收益首選' : `推薦擺法 #${idx + 1}`}
+                              </span>
+                              {solution.bonusDetails.length > 0 && (
+                                <span className="text-xs bg-emerald-500/20 text-emerald-400 border border-emerald-500/30 px-2 py-0.5 rounded-full font-medium">
+                                  包含加注獎勵
+                                </span>
+                              )}
+                            </div>
+                            <button
+                              onClick={() => applyArrangement(solution)}
+                              className="text-xs bg-slate-800 hover:bg-slate-700 text-emerald-400 border border-emerald-500/30 px-2.5 py-1 rounded-lg transition"
+                            >
+                              載入手動牌桌 ➔
+                            </button>
+                          </div>
+
+                          {/* Front / Middle / Back Cards Row */}
+                          <div className="space-y-2">
+                            {/* 頭道 */}
+                            <div className="flex items-center gap-3 bg-slate-900/60 p-2 rounded-xl border border-slate-800/40">
+                              <div className="w-16 text-xs font-semibold text-slate-400 flex flex-col">
+                                <span>頭道 (3張)</span>
+                                <span className="text-[10px] text-amber-400 font-bold">{solution.frontEval.name}</span>
+                              </div>
+                              <div className="flex gap-1.5 flex-1">
+                                {solution.front.map(c => (
+                                  <div key={c.id} className="w-8 h-11 bg-slate-100 rounded text-slate-900 flex flex-col justify-between p-0.5 font-bold text-[10px]">
+                                    <span className={c.suit === 'H' || c.suit === 'D' ? 'text-red-600' : ''}>{c.label}</span>
+                                    <span className={`text-center ${c.suit === 'H' || c.suit === 'D' ? 'text-red-600' : ''}`}>{c.symbol}</span>
+                                  </div>
+                                ))}
+                              </div>
+                            </div>
+
+                            {/* 二道 */}
+                            <div className="flex items-center gap-3 bg-slate-900/60 p-2 rounded-xl border border-slate-800/40">
+                              <div className="w-16 text-xs font-semibold text-slate-400 flex flex-col">
+                                <span>二道 (5張)</span>
+                                <span className="text-[10px] text-emerald-400 font-bold">{solution.midEval.name}</span>
+                              </div>
+                              <div className="flex gap-1.5 flex-1">
+                                {solution.middle.map(c => (
+                                  <div key={c.id} className="w-8 h-11 bg-slate-100 rounded text-slate-900 flex flex-col justify-between p-0.5 font-bold text-[10px]">
+                                    <span className={c.suit === 'H' || c.suit === 'D' ? 'text-red-600' : ''}>{c.label}</span>
+                                    <span className={`text-center ${c.suit === 'H' || c.suit === 'D' ? 'text-red-600' : ''}`}>{c.symbol}</span>
+                                  </div>
+                                ))}
+                              </div>
+                            </div>
+
+                            {/* 尾道 */}
+                            <div className="flex items-center gap-3 bg-slate-900/60 p-2 rounded-xl border border-slate-800/40">
+                              <div className="w-16 text-xs font-semibold text-slate-400 flex flex-col">
+                                <span>尾道 (5張)</span>
+                                <span className="text-[10px] text-blue-400 font-bold">{solution.backEval.name}</span>
+                              </div>
+                              <div className="flex gap-1.5 flex-1">
+                                {solution.back.map(c => (
+                                  <div key={c.id} className="w-8 h-11 bg-slate-100 rounded text-slate-900 flex flex-col justify-between p-0.5 font-bold text-[10px]">
+                                    <span className={c.suit === 'H' || c.suit === 'D' ? 'text-red-600' : ''}>{c.label}</span>
+                                    <span className={`text-center ${c.suit === 'H' || c.suit === 'D' ? 'text-red-600' : ''}`}>{c.symbol}</span>
+                                  </div>
+                                ))}
+                              </div>
+                            </div>
+                          </div>
+
+                          {/* Bonus breakdown */}
+                          {solution.bonusDetails.length > 0 && (
+                            <div className="flex flex-wrap gap-1.5 pt-1">
+                              {solution.bonusDetails.map((b, bIdx) => (
+                                <span key={bIdx} className="text-[10px] bg-amber-500/20 text-amber-300 border border-amber-500/30 px-2 py-0.5 rounded font-mono">
+                                  ✨ {b}
+                                </span>
+                              ))}
+                            </div>
+                          )}
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {}
+              {activeTab === 'manual' && (
+                <div className="bg-slate-900/80 border border-slate-800 rounded-2xl p-4 shadow-xl flex-1 flex flex-col gap-4">
+                  
+                  {/* Validation Banner */}
+                  {manualEval ? (
+                    manualEval.isFoul ? (
+                      <div className="bg-red-500/20 border border-red-500/50 text-red-300 rounded-xl p-3 text-xs flex items-center justify-between">
+                        <span className="font-bold flex items-center gap-1.5">
+                          ⚠️ 倒水 (烏龍) 警示！
+                        </span>
+                        <span>違背規則：第一墩必須小於第二墩，第二墩必須小於或等於第三墩。全賠！</span>
+                      </div>
+                    ) : (
+                      <div className="bg-emerald-500/20 border border-emerald-500/50 text-emerald-300 rounded-xl p-3 text-xs flex items-center justify-between">
+                        <span className="font-bold flex items-center gap-1.5">
+                          ✅ 擺法合法！符合頭道 &lt; 二道 &lt;= 尾道
+                        </span>
+                        {manualEval.bonusPoints > 0 && (
+                          <span className="font-mono bg-amber-500/30 text-amber-200 px-2 py-0.5 rounded border border-amber-400/30">
+                            額外獎勵注數: +{manualEval.bonusPoints} 注
+                          </span>
+                        )}
+                      </div>
+                    )
+                  ) : (
+                    <div className="bg-slate-800/50 border border-slate-700/50 text-slate-400 rounded-xl p-3 text-xs">
+                      提示：請在「AI 智能推薦組合」點選載入，或手動挑選 13 張卡牌分配至三道。
+                    </div>
+                  )}
+
+                  {/* Manual Card Slots */}
+                  <div className="space-y-4">
+                    {/* 頭道 Row */}
+                    <div className="bg-slate-950/60 border border-slate-800 p-3 rounded-xl">
+                      <div className="flex justify-between items-center mb-2">
+                        <span className="text-xs font-bold text-slate-300">頭道 (3張)</span>
+                        {manualEval && <span className="text-xs font-bold text-amber-400">{manualEval.frontEval.name}</span>}
+                      </div>
+                      <div className="flex gap-2 min-h-[64px] items-center">
+                        {manualFront.map(c => (
+                          <div key={c.id} className="w-10 h-14 bg-slate-100 rounded-lg text-slate-900 flex flex-col justify-between p-1 font-bold text-xs shadow">
+                            <span className={c.suit === 'H' || c.suit === 'D' ? 'text-red-600' : ''}>{c.label}</span>
+                            <span className={`text-center ${c.suit === 'H' || c.suit === 'D' ? 'text-red-600' : ''}`}>{c.symbol}</span>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+
+                    {/* 二道 Row */}
+                    <div className="bg-slate-950/60 border border-slate-800 p-3 rounded-xl">
+                      <div className="flex justify-between items-center mb-2">
+                        <span className="text-xs font-bold text-slate-300">二道 (5張)</span>
+                        {manualEval && <span className="text-xs font-bold text-emerald-400">{manualEval.midEval.name}</span>}
+                      </div>
+                      <div className="flex gap-2 min-h-[64px] items-center">
+                        {manualMiddle.map(c => (
+                          <div key={c.id} className="w-10 h-14 bg-slate-100 rounded-lg text-slate-900 flex flex-col justify-between p-1 font-bold text-xs shadow">
+                            <span className={c.suit === 'H' || c.suit === 'D' ? 'text-red-600' : ''}>{c.label}</span>
+                            <span className={`text-center ${c.suit === 'H' || c.suit === 'D' ? 'text-red-600' : ''}`}>{c.symbol}</span>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+
+                    {/* 尾道 Row */}
+                    <div className="bg-slate-950/60 border border-slate-800 p-3 rounded-xl">
+                      <div className="flex justify-between items-center mb-2">
+                        <span className="text-xs font-bold text-slate-300">尾道 (5張)</span>
+                        {manualEval && <span className="text-xs font-bold text-blue-400">{manualEval.backEval.name}</span>}
+                      </div>
+                      <div className="flex gap-2 min-h-[64px] items-center">
+                        {manualBack.map(c => (
+                          <div key={c.id} className="w-10 h-14 bg-slate-100 rounded-lg text-slate-900 flex flex-col justify-between p-1 font-bold text-xs shadow">
+                            <span className={c.suit === 'H' || c.suit === 'D' ? 'text-red-600' : ''}>{c.label}</span>
+                            <span className={`text-center ${c.suit === 'H' || c.suit === 'D' ? 'text-red-600' : ''}`}>{c.symbol}</span>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Manual Bonus Breakdown */}
+                  {manualEval && manualEval.bonusDetails.length > 0 && (
+                    <div className="bg-amber-500/10 border border-amber-500/30 rounded-xl p-3">
+                      <span className="text-xs font-bold text-amber-300 block mb-1">獲得特牌加注獎勵：</span>
+                      <div className="flex flex-wrap gap-2">
+                        {manualEval.bonusDetails.map((b, idx) => (
+                          <span key={idx} className="text-xs bg-amber-500/20 text-amber-200 px-2.5 py-1 rounded-md border border-amber-400/30 font-mono">
+                            {b}
+                          </span>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+
+                </div>
+              )}
+
+            </div>
+          </div>
+
+          {}
+          <footer className="bg-slate-900/60 border border-slate-800/80 rounded-2xl p-4 text-xs text-slate-400 space-y-2">
+            <h3 className="font-bold text-slate-200">📖 十三支賠率與規則提示</h3>
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
+              <div className="bg-slate-950/40 p-2.5 rounded-lg border border-slate-800">
+                <span className="text-emerald-400 font-semibold block mb-1">擺牌限規</span>
+                <span>頭(3張) &lt; 二道(5張) &le; 尾道(5張)。若犯規即為「倒水/擺烏龍」，全賠。頭道不計順子與同花。</span>
+              </div>
+              <div className="bg-slate-950/40 p-2.5 rounded-lg border border-slate-800">
+                <span className="text-amber-400 font-semibold block mb-1">特別墩加注</span>
+                <span>頭道三條 (+3注) | 二道夫佬 (+2注)<br/>尾道四條 (+4注) | 二道四條 (+8注)<br/>尾道同花順 (+5注) | 二道同花順 (+10注)</span>
+              </div>
+              <div className="bg-slate-950/40 p-2.5 rounded-lg border border-slate-800">
+                <span className="text-purple-400 font-semibold block mb-1">報到 (例牌) 通吃</span>
+                <span>三順/三花/六對半 (+3注) | 雜龍 (+13注) | 青龍 (極罕見同花龍)。莊家閒家同時報到由莊家賠。</span>
+              </div>
+            </div>
+          </footer>
+
+        </div>
+      );
+    }
+
+    const root = ReactDOM.createRoot(document.getElementById('root'));
+    root.render(<App />);
+
+    if ('serviceWorker' in navigator) {
+      window.addEventListener('load', () => {
+        navigator.serviceWorker.register('./sw.js')
+          .then(reg => console.log('PWA Service Worker 註冊成功:', reg.scope))
+          .catch(err => console.error('PWA Service Worker 註冊失敗:', err));
+      });
+    }
+  </script>
+</body>
+</html>
